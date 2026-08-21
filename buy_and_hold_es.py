@@ -32,8 +32,9 @@ class BuyAndHoldES(QCAlgorithm):
             data_normalization_mode=DataNormalizationMode.BACKWARDS_PANAMA_CANAL,
             contract_depth_offset=0,
         )
-        # Keep front month + one back month visible in the chain.
-        self._es.set_filter(0, 90)
+        # 182 days ensures both front and back quarterly contracts are visible
+        # (quarterly back month expires ~91-96 days after the front).
+        self._es.set_filter(0, 182)
 
         self._held_contract = None  # Symbol of the contract we currently hold
         self.log(f"Live mode: {self.live_mode}")
@@ -50,6 +51,13 @@ class BuyAndHoldES(QCAlgorithm):
 
         front = contracts[0]
 
+        # Guard: if the held contract expired or was settled externally, reset
+        # so we re-enter cleanly rather than getting stuck with a stale symbol.
+        if self._held_contract is not None:
+            holding = self.portfolio.get(self._held_contract)
+            if holding is None or holding.quantity == 0:
+                self._held_contract = None
+
         # --- Initial entry ---
         if self._held_contract is None:
             self._enter(front.symbol, front.last_price)
@@ -60,7 +68,7 @@ class BuyAndHoldES(QCAlgorithm):
         days_left = (front.expiry.date() - self.time.date()).days
         if self._held_contract == front.symbol and days_left <= self.ROLL_DAYS:
             if len(contracts) < 2:
-                return  # no back month visible yet; wait
+                return  # back month not yet in filter window; wait
             back = contracts[1]
             self._roll(front.symbol, back.symbol, front.last_price, back.last_price)
 
